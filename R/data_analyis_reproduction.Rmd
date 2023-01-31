@@ -1,0 +1,78 @@
+---
+title: "Multi100_Huijts_EurSocioRev_2013_OY3B"
+output: html_document
+date: "`r Sys.Date()`"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(here)
+library(readxl)
+library(lmerTest)
+library(broom)
+library(broom.mixed)
+library(ggbeeswarm)
+
+theme_set(theme_light())
+
+```
+
+```{r}
+wb <- read_csv(here("data/SRD Huijts data final.xls"))
+```
+
+
+```{r}
+# Separate linear regressions by country by gender
+wb_lm <- 
+  wb %>% 
+  group_by(country = cntry, gender = recode(gndr, `1` = "Male", `2` = "Female")) %>% 
+  nest() %>% 
+  mutate(model = map(data, 
+                      ~lm(wellbeing ~ par_stat + age + age2 + married + edu + paredu + rel + pdwrk + brncntr,
+                          data = .x)),
+         model_tidy = map(model, tidy, conf.int = TRUE))
+
+wb_lm %>% 
+  unnest(model_tidy) %>% 
+  filter(term %in% c("par_statLiving w children", "par_statEmpty nest")) %>% 
+  select(-model, -data) %>% 
+  ggplot() +
+  aes(x = term, y = estimate, group = interaction(term, gender), fill = gender) +
+  geom_quasirandom(dodge.width = .5) +
+  geom_boxplot(position = position_dodge(), alpha = .5, outlier.alpha = 0) +
+  geom_text(aes(label = country), alpha = .5, position = position_dodge(.5), check_overlap = TRUE)
+  
+
+```
+
+```{r}
+
+wb_lmer <- 
+  wb %>% 
+  group_by(gender = recode(gndr, `1` = "Male", `2` = "Female")) %>% 
+  nest() %>% 
+  mutate(model = map(data, 
+                     ~lmer(wellbeing~par_stat*childless_disapp_std + #key interaction
+                           age +age2 +married+ edu + paredu + rel + pdwrk + brncntr + 
+                           childless_disapp + sclmeet + (1 + par_stat| cntry), 
+                           data = .x)),
+         model_tidy = map(model, tidy, conf.int = TRUE))
+
+
+wb_lmer %>% 
+  unnest(model_tidy) %>% 
+  select(-data, -model, -effect, -group) %>%
+  filter(str_detect(term, "par_stat")) %>% 
+  ggplot() +
+  aes(y = term, x = estimate, xmin = conf.low, xmax = conf.high) +
+  geom_vline(xintercept = 0, color = "red", lty = "dashed") +
+  geom_pointrange() +
+  facet_wrap(~gender, nrow = 2)
+
+
+```
+
