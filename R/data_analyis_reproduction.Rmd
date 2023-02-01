@@ -6,6 +6,10 @@ editor_options:
   chunk_output_type: console
 ---
 
+# Hypotesis to analyze
+
+_The disadvantage in psychological well-being of childless people is smaller in countries with tolerant norms towards childlessness (p. 32)_
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
@@ -15,13 +19,29 @@ library(lmerTest)
 library(broom)
 library(broom.mixed)
 library(ggbeeswarm)
+library(performance)
+library(sjPlot)
 
 theme_set(theme_light())
 
 ```
 
 ```{r}
-wb <- read_csv(here("data/SRD Huijts data final.xls"))
+edu_levels <- c("Primary", "Lower secondary", "Upper secondary", "Teritary", "Missing")
+
+wb <- 
+  read_csv(here("data/SRD Huijts data final.xls")) %>% 
+  mutate(gender = recode(gndr, `1` = "Male", `2` = "Female"),
+         # Create centered age (to avoid multicollinearity) and age^2
+         age_ctd = scale(agea, scale = FALSE) %>% as.numeric(),
+         age_ctd2 = age_ctd^2,
+         # Set education baseline to Primary, set explicit NA
+         edu = fct_explicit_na(edu, na_level = "Missing") %>% 
+               fct_relevel(edu_levels),
+         paredu = fct_relevel(paredu, edu_levels),
+         # Set parental status baseline to living with children
+         # par_stat = fct_relevel(par_stat, "Living w children")
+         )
 ```
 
 
@@ -29,10 +49,10 @@ wb <- read_csv(here("data/SRD Huijts data final.xls"))
 # Separate linear regressions by country by gender
 wb_lm <- 
   wb %>% 
-  group_by(country = cntry, gender = recode(gndr, `1` = "Male", `2` = "Female")) %>% 
+  group_by(country = cntry, gender) %>% 
   nest() %>% 
   mutate(model = map(data, 
-                      ~lm(wellbeing ~ par_stat + age + age2 + married + edu + paredu + rel + pdwrk + brncntr,
+                      ~lm(wellbeing ~ par_stat + age_ctd + age_ctd2 + married + edu + paredu + rel + pdwrk + brncntr,
                           data = .x)),
          model_tidy = map(model, tidy, conf.int = TRUE))
 
@@ -42,9 +62,9 @@ wb_lm %>%
   select(-model, -data) %>% 
   ggplot() +
   aes(x = term, y = estimate, group = interaction(term, gender), fill = gender) +
-  geom_quasirandom(dodge.width = .5) +
+  geom_quasirandom(dodge.width = .5, alpha = .5) +
   geom_boxplot(position = position_dodge(), alpha = .5, outlier.alpha = 0) +
-  geom_text(aes(label = country), alpha = .5, position = position_dodge(.5), check_overlap = TRUE)
+  geom_text(aes(label = country), position = position_dodge(.5), check_overlap = TRUE, hjust = 0)
   
 
 ```
@@ -53,25 +73,77 @@ wb_lm %>%
 
 wb_lmer <- 
   wb %>% 
-  group_by(gender = recode(gndr, `1` = "Male", `2` = "Female")) %>% 
+  group_by(gender) %>% 
   nest() %>% 
   mutate(model = map(data, 
-                     ~lmer(wellbeing~par_stat*childless_disapp_std + #key interaction
-                           age +age2 +married+ edu + paredu + rel + pdwrk + brncntr + 
-                           childless_disapp + sclmeet + (1 + par_stat| cntry), 
-                           data = .x)),
+                     ~lmer(
+                       wellbeing ~ age + age2 + married + edu + paredu + 
+                                   rel + pdwrk + brncntr + sclmeet + 
+                                   par_stat * childless_disapp_std + 
+                                   (1 + par_stat| cntry),
+                       data = .x)), 
          model_tidy = map(model, tidy, conf.int = TRUE))
 
+term_order <- c(1:11, 13, 15, 16:22, 12, 14)
 
-wb_lmer %>% 
-  unnest(model_tidy) %>% 
-  select(-data, -model, -effect, -group) %>%
-  filter(str_detect(term, "par_stat")) %>% 
-  ggplot() +
-  aes(y = term, x = estimate, xmin = conf.low, xmax = conf.high) +
-  geom_vline(xintercept = 0, color = "red", lty = "dashed") +
-  geom_pointrange() +
-  facet_wrap(~gender, nrow = 2)
+tab_model(wb_lmer$model[[1]], wb_lmer$model[[2]],
+          dv.labels = c("Male", "Female"),
+          # show.std = TRUE, 
+          # show.est = FALSE,
+          show.se = TRUE,
+          show.reflvl = TRUE, 
+          show.ci = FALSE,
+          # order.terms = term_order,
+          prefix.labels = "varname")
+
+isSingular(wb_lmer$model[[1]])
+isSingular(wb_lmer$model[[2]])
+
+
+```
+
+```{r}
+test1 <- 
+  lmer(wellbeing ~ gender + age_ctd + age_ctd2 + married + edu + paredu + 
+                   rel + pdwrk + brncntr + sclmeet + 
+                   par_stat * childless_disapp_std +
+                   (1 | cntry),
+       data = wb)
+
+summary(test1)
+check_model(test1)
+check_collinearity(test1)
+
+tab_model(test1, 
+          show.stat = TRUE, 
+          show.std = TRUE, 
+          show.est = FALSE,
+          show.icc = TRUE, show.aic = TRUE,
+          show.reflvl = TRUE, prefix.labels = "v",
+          order.terms = 
+          )
+
+parameters::parameters(test1, standardize = "basic")
+
+```
+
+```{r}
+
+# Recalculate age
+
+wb %>% 
+  count(pdwrk)
+  
+  
+wb %>%   
+  # Set education baseline to Primary, set explicit NA
+  mutate(edu = fct_relevel(edu, edu_levels) %>% 
+               fct_explicit_na(na_level = "Missing"),
+         paredu = fct_relevel(paredu, edu_levels),
+         # Set parental status baseline to living with children
+         par_stat = fct_relevel(par_stat, "Living w children")) %>% 
+  count(par_stat)
+
 
 
 ```
