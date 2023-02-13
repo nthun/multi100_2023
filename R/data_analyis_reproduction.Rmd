@@ -70,14 +70,26 @@ wb_lm %>%
 ```
 
 ```{r}
-
 wb_lmer <- 
   wb %>% 
+  # select(wellbeing,
+  #        Age = age_ctd, 
+  #        `Age square` = age_ctd2,
+  #        `Marital status` = married,
+  #        `Educational level` = edu,
+  #        `Educational level of parents` = paredu,
+  #        `Religious attendance` = rel,
+  #        `Paid employment` = pdwrk,
+  #        `Born in country` = brncntr,
+  #        `Parental status` = par_stat,
+  #        Country = cntry,
+  #        `Disapproval of childlessness` = childless_disapp_std,
+  #        `Social contacts` = sclmeet) %>% 
   group_by(gender) %>% 
   nest() %>% 
   mutate(model = map(data, 
                      ~lmer(
-                       wellbeing ~ age + age2 + married + edu + paredu + 
+                       wellbeing ~ age_ctd + age_ctd2 + married + edu + paredu + 
                                    rel + pdwrk + brncntr + sclmeet + 
                                    par_stat * childless_disapp_std + 
                                    (1 + par_stat| cntry),
@@ -86,14 +98,19 @@ wb_lmer <-
 
 term_order <- c(1:11, 13, 15, 16:22, 12, 14)
 
-tab_model(wb_lmer$model[[1]], wb_lmer$model[[2]],
+wb_lmer %>% 
+  pull(model) %>% 
+  set_names(pull(wb_lmer, gender)) %>% 
+  tab_model(
           dv.labels = c("Male", "Female"),
-          # show.std = TRUE, 
-          # show.est = FALSE,
-          show.se = TRUE,
+          show.std = TRUE,
+          show.est = FALSE,
+          # show.se = TRUE,
           show.reflvl = TRUE, 
           show.ci = FALSE,
           # order.terms = term_order,
+          show.aic = TRUE,
+          show.dev = TRUE,
           prefix.labels = "varname")
 
 isSingular(wb_lmer$model[[1]])
@@ -104,10 +121,10 @@ isSingular(wb_lmer$model[[2]])
 
 ```{r}
 test1 <- 
-  lmer(wellbeing ~ gender + age_ctd + age_ctd2 + married + edu + paredu + 
+  lmer(wellbeing ~ age_ctd + age_ctd2 + married + edu + paredu + 
                    rel + pdwrk + brncntr + sclmeet + 
-                   par_stat * childless_disapp_std +
-                   (1 | cntry),
+                   gender * par_stat * childless_disapp_std +
+                   (1 + par_stat| cntry),
        data = wb)
 
 summary(test1)
@@ -118,12 +135,14 @@ tab_model(test1,
           show.stat = TRUE, 
           show.std = TRUE, 
           show.est = FALSE,
-          show.icc = TRUE, show.aic = TRUE,
-          show.reflvl = TRUE, prefix.labels = "v",
-          order.terms = 
+          show.icc = TRUE, 
+          show.aic = TRUE,
+          show.reflvl = TRUE, 
+          prefix.labels = "v"
           )
 
-parameters::parameters(test1, standardize = "basic")
+parameters::parameters(test1, standardize = "basic") %>% 
+  print_html()
 
 ```
 
