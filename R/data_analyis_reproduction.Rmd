@@ -40,34 +40,13 @@ wb <-
                fct_relevel(edu_levels),
          paredu = fct_relevel(paredu, edu_levels),
          # Set parental status baseline to living with children
-         # par_stat = fct_relevel(par_stat, "Living w children")
+         par_stat = fct_relevel(par_stat, "Living w children"),
+         # Correcting a rounding error for country: SI
+         childless_disapp_std = if_else(cntry == "SI", 0.1954625, childless_disapp_std)
          )
 ```
 
 
-```{r}
-# Separate linear regressions by country by gender
-wb_lm <- 
-  wb %>% 
-  group_by(country = cntry, gender) %>% 
-  nest() %>% 
-  mutate(model = map(data, 
-                      ~lm(wellbeing ~ par_stat + age_ctd + age_ctd2 + married + edu + paredu + rel + pdwrk + brncntr,
-                          data = .x)),
-         model_tidy = map(model, tidy, conf.int = TRUE))
-
-wb_lm %>% 
-  unnest(model_tidy) %>% 
-  filter(term %in% c("par_statLiving w children", "par_statEmpty nest")) %>% 
-  select(-model, -data) %>% 
-  ggplot() +
-  aes(x = term, y = estimate, group = interaction(term, gender), fill = gender) +
-  geom_quasirandom(dodge.width = .5, alpha = .5) +
-  geom_boxplot(position = position_dodge(), alpha = .5, outlier.alpha = 0) +
-  geom_text(aes(label = country), position = position_dodge(.5), check_overlap = TRUE, hjust = 0)
-  
-
-```
 
 ```{r}
 wb_lmer <- 
@@ -92,11 +71,9 @@ wb_lmer <-
                        wellbeing ~ age_ctd + age_ctd2 + married + edu + paredu + 
                                    rel + pdwrk + brncntr + sclmeet + 
                                    par_stat * childless_disapp_std + 
-                                   (1 + par_stat| cntry),
+                                   (1 | cntry),
                        data = .x)), 
          model_tidy = map(model, tidy, conf.int = TRUE))
-
-term_order <- c(1:11, 13, 15, 16:22, 12, 14)
 
 wb_lmer %>% 
   pull(model) %>% 
@@ -105,10 +82,9 @@ wb_lmer %>%
           dv.labels = c("Male", "Female"),
           show.std = TRUE,
           show.est = FALSE,
-          # show.se = TRUE,
+          show.se = TRUE,
           show.reflvl = TRUE, 
           show.ci = FALSE,
-          # order.terms = term_order,
           show.aic = TRUE,
           show.dev = TRUE,
           prefix.labels = "varname")
@@ -116,52 +92,69 @@ wb_lmer %>%
 isSingular(wb_lmer$model[[1]])
 isSingular(wb_lmer$model[[2]])
 
+# wb_lmer$model[[1]]@vcov_beta %>% row.names() %>% sort()
 
 ```
 
+
 ```{r}
-test1 <- 
-  lmer(wellbeing ~ age_ctd + age_ctd2 + married + edu + paredu + 
-                   rel + pdwrk + brncntr + sclmeet + 
-                   gender * par_stat * childless_disapp_std +
-                   (1 + par_stat| cntry),
-       data = wb)
+#Visualize results
+# Separate linear regressions by country by gender
+wb_lm <- 
+  wb %>% 
+  group_by(country = cntry, gender, childless_disapp_std) %>% 
+  nest() %>% 
+  mutate(model = map(data, 
+                      ~lm(wellbeing ~ par_stat + age_ctd + age_ctd2 + married + 
+                                      edu + paredu + rel + pdwrk + brncntr +
+                                      sclmeet,
+                                      data = .x)),
+         model_tidy = map(model, tidy, conf.int = TRUE),
+         n = map_int(data, nrow))
 
-summary(test1)
-check_model(test1)
-check_collinearity(test1)
-
-tab_model(test1, 
-          show.stat = TRUE, 
-          show.std = TRUE, 
-          show.est = FALSE,
-          show.icc = TRUE, 
-          show.aic = TRUE,
-          show.reflvl = TRUE, 
-          prefix.labels = "v"
-          )
-
-parameters::parameters(test1, standardize = "basic") %>% 
-  print_html()
-
+wb_lm %>% 
+    unnest(model_tidy) %>% 
+    ungroup() %>% 
+    filter(str_detect(term, "par_stat")) %>% 
+    select(childless_disapp_std:country, term, estimate, n) %>% 
+    ggplot() +
+    aes(x = childless_disapp_std, y = estimate, color = term, group = term) +
+    geom_point(aes(size = n), alpha = .5) +
+    geom_smooth(method = "lm", mapping = aes(weight = n), se = FALSE) + 
+    geom_text(aes(label = country), check_overlap = TRUE, color = "black") +
+    facet_wrap(~gender) +
+    labs(title = "Association between effect size (beta) of pariatal status and well-being and childlessness disapproval",
+         subtitle = "Effects are in comparison with living with children. Lines show weighted regressions.",
+         x = "Childlessness disapproval",
+         y = "Effect of parental status on well-being",
+         color = "Parental status")
 ```
 
+Childlessness disapproval is negatively associated well-being in childless females, compared to those living with children. 
+
+We did not find this association in males. However 
+
+
+# SANDBOX
 ```{r}
 
-# Recalculate age
 
 wb %>% 
-  count(pdwrk)
+  group_by(count)
+  ggplot() +
+  aes(x = childless_disapp_std, y = wellbeing, color = par_stat) +
+  geom_point(alpha = .3) +
+  geom_smooth(method = "lm") + 
+  facet_wrap(~gender)
   
   
-wb %>%   
-  # Set education baseline to Primary, set explicit NA
-  mutate(edu = fct_relevel(edu, edu_levels) %>% 
-               fct_explicit_na(na_level = "Missing"),
-         paredu = fct_relevel(paredu, edu_levels),
-         # Set parental status baseline to living with children
-         par_stat = fct_relevel(par_stat, "Living w children")) %>% 
-  count(par_stat)
+wb %>% 
+  mutate(childless_disapp_std = if_else(cntry == "SI", 0.1954625, childless_disapp_std)) %>% 
+  select(country = cntry, gender, childless_disapp_std) %>% 
+  filter(country == "SI") %>% #view()
+  pull(childless_disapp_std) %>% 
+  `/`(0.1954625)
+  view()
 
 
 
