@@ -21,10 +21,18 @@ library(broom.mixed)
 library(ggbeeswarm)
 library(performance)
 library(sjPlot)
+library(marginaleffects)
 
 theme_set(theme_light())
 
 ```
+
+# Reading the data
+
+We made a few changes in the dataset before analysis.  
+- We created a centered version of age (and age^2) to avoid structural multicollinearity.
+- We set the baseline levels for factor variables.
+- We found a small rounding error in a small number of cases in `childless_disapp_std` values for Slovenia that we corrected. In the original dataset, it seemed like as Slovenia having two slightly different values for this variable, although each country should have only one value.
 
 ```{r}
 edu_levels <- c("Primary", "Lower secondary", "Upper secondary", "Teritary", "Missing")
@@ -47,6 +55,35 @@ wb <-
 ```
 
 
+# Finding the proper random structure
+We compared the fixed model (multiple linear regression without random components), the random intercept model, and random and slopes model. 
+
+```{r}
+
+# Non-multilevel model
+wb_0 <-
+  lm(wellbeing ~ age_ctd + age_ctd2 + married + edu + paredu + rel + pdwrk + 
+       brncntr + sclmeet + par_stat * childless_disapp_std + gender, data = wb)
+
+# Random intercept model
+wb_int <-
+  lmer(wellbeing ~ age_ctd + age_ctd2 + married + edu + paredu + rel + pdwrk + 
+       brncntr + sclmeet + par_stat * childless_disapp_std + gender +
+       (1 | cntry), data = wb)
+
+# Ranndom intercept and slopes model
+wb_intslope <-
+  lmer(wellbeing ~ age_ctd + age_ctd2 + married + edu + paredu + rel + pdwrk + 
+       brncntr + sclmeet + par_stat * childless_disapp_std + gender +
+       (1 + par_stat | cntry), data = wb)
+     
+anova(wb_int, wb_0, wb_intslope)
+
+```
+
+We used the BIC for comparison, as we wanted to the the large number of predictors 
+
+values the random intercept model is the best fit, as it 
 
 ```{r}
 wb_lmer <- 
@@ -66,6 +103,7 @@ wb_lmer <-
   #        `Social contacts` = sclmeet) %>% 
   group_by(gender) %>% 
   nest() %>% 
+  ungroup() %>% 
   mutate(model = map(data, 
                      ~lmer(
                        wellbeing ~ age_ctd + age_ctd2 + married + edu + paredu + 
@@ -148,15 +186,88 @@ wb %>%
   facet_wrap(~gender)
   
   
-wb %>% 
-  mutate(childless_disapp_std = if_else(cntry == "SI", 0.1954625, childless_disapp_std)) %>% 
-  select(country = cntry, gender, childless_disapp_std) %>% 
-  filter(country == "SI") %>% #view()
-  pull(childless_disapp_std) %>% 
-  `/`(0.1954625)
-  view()
+wb1 <-   
+  wb_lmer %>% 
+  slice(1) %>% 
+  pull(model) %>% 
+  .[[1]]
+
+wb %>% count(par_stat)
+
+predictions(wb1)
+wb
+pred <- predictions(
+    wb1,
+    newdata = datagrid(cntry = NA,
+                       par_stat = c("Living w children","Childless", "Empty nest"),
+                       childless_disapp_std = seq(-1.5, 2, .5)),
+    re.form = NA)
+
+datagrid(
+  model = wb1,
+  cntry = unique(wb$cntry),
+  par_stat = c("Childless", "Empty nest"),
+  childless_disapp_std = seq(-1.5, 2, .5)
+)
+
+pred %>%
+  ggplot() +
+  aes(x = childless_disapp_std,
+      y = predicted,
+      group = par_stat,
+      ymin = conf.low,
+      ymax = conf.high) +
+  geom_ribbon(alpha = .1, fill = "red") +
+  geom_line() +
+  # facet_wrap( ~ par_stat, labeller = label_both) +
+  labs(title = "Population-level trajectories")
+
+
+
+pred <- predictions(wb1)
+
+ggplot(pred) +
+  aes(
+    x = childless_disapp_std,
+    y = predicted,
+    level = par_stat,
+    group = par_stat
+  ) +
+  geom_line() +
+  ylab("Predicted Weight") #+
+    # facet_wrap(~ Diet, labeller = label_both)
+
+count_pred <- 
+  predictions(
+    wb1,
+    newdata = datagrid(cntry = unique, par_stat = unique))
+
+
+cntry_pred <-
+  marginalmeans(model = wb1, 
+                by = c("par_stat"), 
+                variables_grid = list("childless_disapp_std" = seq(-1.5, 2, .5))
+                                                   ) %>% 
+  filter(term == "cntry")
+
+
+cntry_pred %>% 
+  ggplot() +
+  aes(x = childless_disapp_std, y = marginalmean, color = value, group = value)+
+    geom_point(aes(size = n), alpha = .5) +
+    geom_smooth(method = "lm", mapping = aes(weight = n), se = FALSE) + 
+    geom_text(aes(label = country), check_overlap = TRUE, color = "black") +
+    facet_wrap(~gender) +
+    labs(title = "Association between effect size (beta) of pariatal status and well-being and childlessness disapproval",
+         subtitle = "Effects are in comparison with living with children. Lines show weighted regressions.",
+         x = "Childlessness disapproval",
+         y = "Effect of parental status on well-being",
+         color = "Parental status")
+
 
 
 
 ```
+
+
 
